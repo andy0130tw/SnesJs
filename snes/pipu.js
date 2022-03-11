@@ -224,6 +224,10 @@ function Ppu(snes) {
     }
   }
 
+  this.getColorBuf = new Uint16Array(256*3)
+  this.getSubColorBuf = new Uint16Array(256*3)
+  this.__windowStateCache = []
+
   this.renderLine = function(line) {
     if(line === 0) {
       // pre-render line
@@ -258,8 +262,24 @@ function Ppu(snes) {
       this.optVerBuffer = [0, 0];
       this.lastOrigTileX = [-1, -1];
       let bMult = this.brightnessMults[this.brightness];
-      let i = 0;
-      while(i < 256) {
+
+      const __windowStateAtLayer5 = this.getWindowState(5);
+      let __cachedGetColor = null
+      let __cachedGetSubColor = null
+      const __mathEnabledCache = []
+      this.__windowStateCache = [null, null, null, null, null, __windowStateAtLayer5]
+
+      // let count = this.layercountPerMode[this.mode];
+      // const possibleLayers = new Set()
+      // for (let zz = 0; zz < count; zz++) {
+      //   possibleLayers.add(this.layersPerMode[modeIndex + zz])
+      // }
+      // Array.from(possibleLayers)
+      ;[0, 1, 2, 4].forEach(z => {
+        this.__windowStateCache[z] = this.getWindowState(z)
+      })
+
+      for(let i = 0; i < 256; i++) {
         // for each pixel
 
         let r1 = 0;
@@ -271,8 +291,12 @@ function Ppu(snes) {
 
         if(!this.forcedBlank) {
 
-          let colLay = this.getColor(false, i, line);
-          let color = colLay[0];
+          if (__cachedGetColor == null) {
+            __cachedGetColor = this.getColor(false, line)
+          }
+
+          let colLay = __cachedGetColor;
+          let color = colLay[i*3];
 
           r2 = color & 0x1f;
           g2 = (color & 0x3e0) >> 5;
@@ -280,8 +304,8 @@ function Ppu(snes) {
 
           if(
             this.colorClip === 3 ||
-            (this.colorClip === 2 && this.getWindowState(i, 5)) ||
-            (this.colorClip === 1 && !this.getWindowState(i, 5))
+            (this.colorClip === 2 && __windowStateAtLayer5[i]) ||
+            (this.colorClip === 1 && !__windowStateAtLayer5[i])
           ) {
             r2 = 0;
             g2 = 0;
@@ -289,17 +313,41 @@ function Ppu(snes) {
           }
 
           let secondLay = [0, 5, 0];
+          let secondLayComp = colLay[i*3+1];
+
+          if (__mathEnabledCache[secondLayComp] == null) {
+            __mathEnabledCache[secondLayComp] = this.getMathEnabled(__windowStateAtLayer5, secondLayComp)
+          }
+          let mathEnabledForI = __mathEnabledCache[secondLayComp]
+          const dependOnPalette = mathEnabledForI[256]
+
+          if (dependOnPalette) {
+            mathEnabledForI = mathEnabledForI.slice()
+            for (let x = 0; x < 256; x++) {
+              if (mathEnabledForI[x] == 2) {
+                mathEnabledForI[x] = colLay[i*3+2] >= 0xc0
+              }
+            }
+          }
+
           if(
             this.mode === 5 || this.mode === 6 || this.pseudoHires ||
-            (this.getMathEnabled(i, colLay[1], colLay[2]) && this.addSub)
+            (mathEnabledForI[i] && this.addSub)
           ) {
-            secondLay = this.getColor(true, i, line);
+
+            if (__cachedGetSubColor == null) {
+              __cachedGetSubColor = this.getColor(true, line)
+            }
+
+            secondLay[0] = __cachedGetSubColor[i*3];
+            secondLay[1] = __cachedGetSubColor[i*3+1];
+            secondLay[2] = __cachedGetSubColor[i*3+2];
             r1 = secondLay[0] & 0x1f;
             g1 = (secondLay[0] & 0x3e0) >> 5;
             b1 = (secondLay[0] & 0x7c00) >> 10;
           }
 
-          if(this.getMathEnabled(i, colLay[1], colLay[2])) {
+          if(mathEnabledForI[i]) {
             if(this.subtractColors) {
               r2 -= (this.addSub && secondLay[1] < 5) ? r1 : this.fixedColorR;
               g2 -= (this.addSub && secondLay[1] < 5) ? g1 : this.fixedColorG;
@@ -336,10 +384,8 @@ function Ppu(snes) {
         this.pixelOutput[line * 1536 + 6 * i + 3] = (r2 * bMult) & 0xff;
         this.pixelOutput[line * 1536 + 6 * i + 4] = (g2 * bMult) & 0xff;
         this.pixelOutput[line * 1536 + 6 * i + 5] = (b2 * bMult) & 0xff;
-
-        i++;
-
       }
+
       clearArray(this.spriteLineBuffer);
       if(!this.forcedBlank) {
         this.evaluateSprites(line);
@@ -347,162 +393,213 @@ function Ppu(snes) {
     }
   }
 
-  this.getColor = function(sub, x, y) {
+  this.getColor = function(sub, y) {
+    const result = sub ? this.getSubColorBuf : this.getColorBuf;
+    // windowState cache should be prepared ahead of time
+    const __windowStateAtLayerN = this.__windowStateCache
 
     let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
     modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
     let count = this.layercountPerMode[this.mode];
 
-    let j;
-    let pixel = 0;
-    let layer = 5;
-    if(this.interlace && (this.mode === 5 || this.mode === 6)) {
-      y = y * 2 + (this.evenFrame ? 1 : 0);
-    }
-    for(j = 0; j < count; j++) {
-      let lx = x;
-      let ly = y;
-      layer = this.layersPerMode[modeIndex + j];
-      if(
-        (
-          !sub && this.mainScreenEnabled[layer] &&
-          (!this.mainScreenWindow[layer] || !this.getWindowState(lx, layer))
-        ) || (
-          sub && this.subScreenEnabled[layer] &&
-          (!this.subScreenWindow[layer] || !this.getWindowState(lx, layer))
-        )
-      ) {
-        if(this.mosaicEnabled[layer]) {
-          lx -= lx % this.mosaicSize;
-          ly -= (ly - this.mosaicStartLine) % this.mosaicSize;
-        }
-        lx += this.mode === 7 ? 0 : this.bgHoff[layer];
-        ly += this.mode === 7 ? 0 : this.bgVoff[layer];
-        let optX = lx - this.bgHoff[layer];
-        if((this.mode === 5 || this.mode === 6) && layer < 4) {
-          lx = lx * 2 + (sub ? 0 : 1);
-          optX = optX * 2 + (sub ? 0 : 1);
-        }
+    for (let x = 0; x < 256; x++) {
+      let j;
+      let pixel = 0;
+      let layer = 5;
+      if(this.interlace && (this.mode === 5 || this.mode === 6)) {
+        y = y * 2 + (this.evenFrame ? 1 : 0);
+      }
 
-        //let origLx = lx;
+      for(j = 0; j < count; j++) {
+        let lx = x;
+        let ly = y;
+        layer = this.layersPerMode[modeIndex + j];
 
-        if((this.mode === 2 || this.mode === 4 || this.mode === 6) && layer < 2) {
-          let andVal = layer === 0 ? 0x2000 : 0x4000;
-          if(x === 0) {
-            this.lastOrigTileX[layer] = lx >> 3;
+        if (__windowStateAtLayerN[layer] == null) {
+          __windowStateAtLayerN[layer] = this.getWindowState(layer)
+        }
+        const __windowState = __windowStateAtLayerN[layer]
+
+        if(
+          (
+            !sub && this.mainScreenEnabled[layer] &&
+            (!this.mainScreenWindow[layer] || !__windowState[x])
+          ) || (
+            sub && this.subScreenEnabled[layer] &&
+            (!this.subScreenWindow[layer] || !__windowState[x])
+          )
+        ) {
+          if(this.mosaicEnabled[layer]) {
+            lx -= lx % this.mosaicSize;
+            ly -= (ly - this.mosaicStartLine) % this.mosaicSize;
           }
-          // where the relevant tile started
-          // TODO: lx can be above 0xffff (e.g. if scroll is 0xffff, and x > 0)
-          let tileStartX = optX - (lx - (lx & 0xfff8));
-          if((lx >> 3) !== this.lastOrigTileX[layer] && x > 0) {
-            // we are fetching a new tile for the layer, get a new OPT-tile
-            // if(logging && y === 32 && (this.mode === 2 || this.mode === 4 || this.mode === 6) && layer === 0) {
-            //   log("at X = " + x + ", lx: " + getWordRep(lx) + ", fetched new tile for OPT");
-            // }
-            this.fetchTileInBuffer(
-              this.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
-              this.bgVoff[2], 2, true
-            );
-            this.optHorBuffer[layer] = this.tilemapBuffer[2];
-            if(this.mode === 4) {
-              if((this.optHorBuffer[layer] & 0x8000) > 0) {
-                this.optVerBuffer[layer] = this.optHorBuffer[layer];
-                this.optHorBuffer[layer] = 0;
-              } else {
-                this.optVerBuffer[layer] = 0;
-              }
-            } else {
+          lx += this.mode === 7 ? 0 : this.bgHoff[layer];
+          ly += this.mode === 7 ? 0 : this.bgVoff[layer];
+          let optX = lx - this.bgHoff[layer];
+          if((this.mode === 5 || this.mode === 6) && layer < 4) {
+            lx = lx * 2 + (sub ? 0 : 1);
+            optX = optX * 2 + (sub ? 0 : 1);
+          }
+
+          //let origLx = lx;
+
+          if((this.mode === 2 || this.mode === 4 || this.mode === 6) && layer < 2) {
+            let andVal = layer === 0 ? 0x2000 : 0x4000;
+            if(x === 0) {
+              this.lastOrigTileX[layer] = lx >> 3;
+            }
+            // where the relevant tile started
+            // TODO: lx can be above 0xffff (e.g. if scroll is 0xffff, and x > 0)
+            let tileStartX = optX - (lx - (lx & 0xfff8));
+            if((lx >> 3) !== this.lastOrigTileX[layer] && x > 0) {
+              // we are fetching a new tile for the layer, get a new OPT-tile
+              // if(logging && y === 32 && (this.mode === 2 || this.mode === 4 || this.mode === 6) && layer === 0) {
+              //   log("at X = " + x + ", lx: " + getWordRep(lx) + ", fetched new tile for OPT");
+              // }
               this.fetchTileInBuffer(
                 this.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
-                this.bgVoff[2] + 8, 2, true
+                this.bgVoff[2], 2, true
               );
-              this.optVerBuffer[layer] = this.tilemapBuffer[2];
+              this.optHorBuffer[layer] = this.tilemapBuffer[2];
+              if(this.mode === 4) {
+                if((this.optHorBuffer[layer] & 0x8000) > 0) {
+                  this.optVerBuffer[layer] = this.optHorBuffer[layer];
+                  this.optHorBuffer[layer] = 0;
+                } else {
+                  this.optVerBuffer[layer] = 0;
+                }
+              } else {
+                this.fetchTileInBuffer(
+                  this.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
+                  this.bgVoff[2] + 8, 2, true
+                );
+                this.optVerBuffer[layer] = this.tilemapBuffer[2];
+              }
+              this.lastOrigTileX[layer] = lx >> 3;
             }
-            this.lastOrigTileX[layer] = lx >> 3;
+            if((this.optHorBuffer[layer] & andVal) > 0) {
+              //origLx = lx;
+              let add = ((tileStartX + 7) & 0x1f8);
+              lx = (lx & 0x7) + ((this.optHorBuffer[layer] + add) & 0x1ff8);
+            }
+            if((this.optVerBuffer[layer] & andVal) > 0) {
+              ly = (this.optVerBuffer[layer] & 0x1fff) + (ly - this.bgVoff[layer]);
+            }
           }
-          if((this.optHorBuffer[layer] & andVal) > 0) {
-            //origLx = lx;
-            let add = ((tileStartX + 7) & 0x1f8);
-            lx = (lx & 0x7) + ((this.optHorBuffer[layer] + add) & 0x1ff8);
-          }
-          if((this.optVerBuffer[layer] & andVal) > 0) {
-            ly = (this.optVerBuffer[layer] & 0x1fff) + (ly - this.bgVoff[layer]);
-          }
+          // if(logging && y === 32 && (this.mode === 2 || this.mode === 4 || this.mode === 6) && layer === 0) {
+          //   log("at X = " + x + ", lx: " + getWordRep(lx) + ", ly: " + getWordRep(ly) + ", optHB: " + getWordRep(this.optHorBuffer[layer]) + ", orig lx: " + getWordRep(origLx));
+          // }
+
+          pixel = this.getPixelForLayer(
+            lx, ly,
+            layer,
+            this.prioPerMode[modeIndex + j]
+          );
         }
-        // if(logging && y === 32 && (this.mode === 2 || this.mode === 4 || this.mode === 6) && layer === 0) {
-        //   log("at X = " + x + ", lx: " + getWordRep(lx) + ", ly: " + getWordRep(ly) + ", optHB: " + getWordRep(this.optHorBuffer[layer]) + ", orig lx: " + getWordRep(origLx));
-        // }
+        if((pixel & 0xff) > 0) {
+          break;
+        }
+      }
+      layer = j === count ? 5 : layer;
+      let color = this.cgram[pixel & 0xff];
+      if(
+        this.directColor && layer < 4 &&
+        this.bitPerMode[this.mode * 4 + layer] === 8
+      ) {
+        let r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
+        let g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
+        let b = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
+        color = (b << 10) | (g << 5) | r;
+      }
 
-        pixel = this.getPixelForLayer(
-          lx, ly,
-          layer,
-          this.prioPerMode[modeIndex + j]
-        );
-      }
-      if((pixel & 0xff) > 0) {
-        break;
-      }
-    }
-    layer = j === count ? 5 : layer;
-    let color = this.cgram[pixel & 0xff];
-    if(
-      this.directColor && layer < 4 &&
-      this.bitPerMode[this.mode * 4 + layer] === 8
-    ) {
-      let r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
-      let g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
-      let b = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
-      color = (b << 10) | (g << 5) | r;
+      result[x * 3] = color
+      result[x * 3 + 1] = layer
+      result[x * 3 + 2] = pixel
+
+      // end of for each pixel
     }
 
-    return [color, layer, pixel];
+    // color = u16
+    // layer = 3-bits
+    // pixel = u16?
+    // return [color, layer, pixel];
+    return result;
   }
 
-  this.getMathEnabled = function(x, l, pal) {
-    if(
-      this.preventMath === 3 ||
-      (this.preventMath === 2 && this.getWindowState(x, 5)) ||
-      (this.preventMath === 1 && !this.getWindowState(x, 5))
-    ) {
-      return false;
+  this.getMathEnabled = function(windowStateAtLayer5, l) {
+    const result = new Uint8Array(257);
+
+    for (let x = 0; x < 256; x++) {
+      if(
+        this.preventMath === 3 ||
+        (this.preventMath === 2 && windowStateAtLayer5[x]) ||
+        (this.preventMath === 1 && !windowStateAtLayer5[x])
+      ) {
+        continue; // return false;
+      }
+      // if(this.mathEnabled[l] && (l !== 4 || pal >= 0xc0)) {
+      if(this.mathEnabled[l]) {
+        if (l !== 4) {
+          result[x] = 1; continue; // return true;
+        } else {
+          // depends on pal >= 0xc0
+          result[x] = 2; result[256] = 1;
+          continue;
+        }
+      }
+      continue; // return false;
     }
-    if(this.mathEnabled[l] && (l !== 4 || pal >= 0xc0)) {
-      return true;
-    }
-    return false;
+
+    return result;
   }
 
-  this.getWindowState = function(x, l) {
+  this.getWindowState = function(l) {
+    const result = new Uint8Array(256);
+
     if(!this.window1Enabled[l] && !this.window2Enabled[l]) {
-      return false;
+      return result;
     }
     if(this.window1Enabled[l] && !this.window2Enabled[l]) {
-      let test = x >= this.window1Left && x <= this.window1Right;
-      return this.window1Inversed[l] ? !test : test;
+      for (let x = 0; x < 256; x++) {
+        let test = x >= this.window1Left && x <= this.window1Right;
+        result[x] = this.window1Inversed[l] ? !test : test;
+      }
+      return result;
     }
     if(!this.window1Enabled[l] && this.window2Enabled[l]) {
-      let test = x >= this.window2Left && x <= this.window2Right;
-      return this.window2Inversed[l] ? !test : test;
+      for (let x = 0; x < 256; x++) {
+        let test = x >= this.window2Left && x <= this.window2Right;
+        result[x] = this.window2Inversed[l] ? !test : test;
+      }
+      return result;
     }
     // both window enabled
-    let w1test = x >= this.window1Left && x <= this.window1Right;
-    w1test = this.window1Inversed[l] ? !w1test : w1test;
-    let w2test = x >= this.window2Left && x <= this.window2Right;
-    w2test = this.window2Inversed[l] ? !w2test : w2test;
-    switch(this.windowMaskLogic[l]) {
-      case 0: {
-        return w1test || w2test;
-      }
-      case 1: {
-        return w1test && w2test;
-      }
-      case 2: {
-        return w1test !== w2test;
-      }
-      case 3: {
-        return w1test === w2test;
+    for (let x = 0; x < 256; x++) {
+      let w1test = x >= this.window1Left && x <= this.window1Right;
+      w1test = this.window1Inversed[l] ? !w1test : w1test;
+      let w2test = x >= this.window2Left && x <= this.window2Right;
+      w2test = this.window2Inversed[l] ? !w2test : w2test;
+      switch(this.windowMaskLogic[l]) {
+        case 0: {
+          result[x] = w1test || w2test;
+          continue;
+        }
+        case 1: {
+          result[x] = w1test && w2test;
+          continue;
+        }
+        case 2: {
+          result[x] = w1test !== w2test;
+          continue;
+        }
+        case 3: {
+          result[x] = w1test === w2test;
+          continue;
+        }
       }
     }
+
+    return result;
   }
 
   this.getPixelForLayer = function(x, y, l, p) {
