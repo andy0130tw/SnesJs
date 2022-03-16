@@ -137,8 +137,11 @@ document.onvisibilitychange = function(e) {
   }
 }
 
-function loadRom(rom) {
+async function loadRom(rom) {
   let hiRom = el("ishirom").checked;
+
+  await snes.ppu.initialize()
+
   if(snes.loadRom(rom, hiRom)) {
     snes.reset(true);
     if(!loaded && !paused) {

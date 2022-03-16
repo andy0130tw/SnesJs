@@ -32,8 +32,8 @@ function AudioHandler() {
 
       if (!this.actx) {
         this.actx = new Ac({ sampleRate: 44100 });
+        log("Audio initialized, sample rate: " + this.actx.sampleRate);
       }
-      log("Audio initialized, sample rate: " + this.actx.sampleRate);
 
       this.scriptNode = this.actx.createScriptProcessor(2048, 0, 2);
       let that = this;
