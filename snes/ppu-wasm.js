@@ -25,6 +25,9 @@ class Ppu {
     this.wasmModule = null
     this.ptrSnes = 0
     this.ptrPpu = 0
+    this.ptrFrameBuf = 0
+    this.ptrOverscan = 0
+    this.ptrFrameOverscan = 0
   }
 
   async initialize() {
@@ -63,20 +66,17 @@ class Ppu {
     this.latchedHpos = 0
     this.latchedVpos = 0
     this.countersLatched = false
-    this.ptrFrameBuf = 0
-    this.ptrOverscan = 0
-    this.ptrFrameOverscan = 0
   }
 
   checkOverscan(line) {
-    if (line === 225) {
+    if (line === 225 && this.wasmModule.HEAPU8[this.ptrOverscan]) {
       // this.wasmModule._ppu_checkOverscan(this.ptrPpu)
-      this.wasmModule.HEAPU8[this.ptrFrameOverscan] = this.wasmModule.HEAPU8[this.ptrOverscan]
+      this.wasmModule.HEAPU8[this.ptrFrameOverscan] = true
     }
   }
 
   renderLine(y) {
-    // this.wasmModule._ppu_runLine(this.ptrPpu, y)
+    this.wasmModule._ppu_runLine(this.ptrPpu, y)
   }
 
   read(addr) {
@@ -106,10 +106,9 @@ class Ppu {
   }*/
 
     this.wasmModule._ppu_putPixels(this.ptrPpu, this.ptrFrameBuf)
+    this.wasmModule._snes_fixByteOrder(this.ptrFrameBuf)
 
     const memView = this.wasmModule.HEAPU8.subarray(this.ptrFrameBuf, this.ptrFrameBuf + 2048 * 480)
     buf.set(memView)
-    // console.log(memView)
-    // debugger
   }
 }
