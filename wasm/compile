@@ -1,0 +1,11 @@
+#!/bin/bash -x
+~/emsdk/upstream/emscripten/emcc -O3 *.c \
+  -o a.out.js \
+  -msimd128 \
+  -g3 \
+  -s MODULARIZE \
+  -s EXPORT_NAME=createModule \
+  -s NO_USE_SDL -s NO_FILESYSTEM \
+  -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
+  -s EXPORTED_FUNCTIONS=_malloc,_snes_getOpenBus \
+  -s EXPORTED_RUNTIME_METHODS=getValue,setValue
