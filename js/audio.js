@@ -31,10 +31,15 @@ function AudioHandler() {
     if(this.hasAudio) {
 
       if (!this.actx) {
-        this.actx = new Ac({ sampleRate: 44100 });
+        this.actx = new Ac({
+          sampleRate: 44100,
+        });
         log("Audio initialized, sample rate: " + this.actx.sampleRate);
       }
 
+      if (this.scriptNode != null) {
+        this.scriptNode.disconnect();
+      }
       this.scriptNode = this.actx.createScriptProcessor(2048, 0, 2);
       let that = this;
       this.scriptNode.onaudioprocess = function(e) {
