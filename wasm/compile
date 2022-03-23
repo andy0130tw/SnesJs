@@ -2,7 +2,8 @@
 ~/emsdk/upstream/emscripten/emcc -O3 *.c \
   -o a.out.js \
   -msimd128 \
-  -g3 \
+  -g1 \
+  --closure 0 \
   -s MODULARIZE \
   -s EXPORT_NAME=createModule \
   -s NO_USE_SDL -s NO_FILESYSTEM \

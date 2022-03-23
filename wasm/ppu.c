@@ -62,7 +62,7 @@ static const int spriteSizes[8][2] = {
 };
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y);
-static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int* r, int* g, int* b);
+static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int out[3]);
 static uint16_t ppu_getOffsetValue(Ppu* ppu, int col, int row);
 static int ppu_getPixelForBgLayer(Ppu* ppu, int x, int y, int layer, bool priority);
 static void ppu_handleOPT(Ppu* ppu, int layer, int* lx, int* ly);
@@ -229,22 +229,18 @@ void ppu_runLine(Ppu* ppu, int line) {
 }
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y) {
-  int r = 0, r2 = 0;
-  int g = 0, g2 = 0;
-  int b = 0, b2 = 0;
+  int color1[3] = {}, color2[3] = {};
 
   bool colorWindowState = ppu->windowLayer[5].windowStateCache[x];
 
   if(!ppu->forcedBlank) {
-    int mainLayer = ppu_getPixel(ppu, x, y, false, &r, &g, &b);
+    int mainLayer = ppu_getPixel(ppu, x, y, false, color1);
     if(
       ppu->clipMode == 3 ||
       (ppu->clipMode == 2 && colorWindowState) ||
       (ppu->clipMode == 1 && !colorWindowState)
     ) {
-      r = 0;
-      g = 0;
-      b = 0;
+      color1[0] = 0, color1[1] = 0, color1[2] = 0;
     }
     int secondLayer = 5; // backdrop
     bool mathEnabled = mainLayer < 6 && ppu->mathEnabled[mainLayer] && !(
@@ -253,46 +249,44 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
       (ppu->preventMathMode == 1 && !colorWindowState)
     );
     if((mathEnabled && ppu->addSubscreen) || ppu->pseudoHires || ppu->mode == 5 || ppu->mode == 6) {
-      secondLayer = ppu_getPixel(ppu, x, y, true, &r2, &g2, &b2);
+      secondLayer = ppu_getPixel(ppu, x, y, true, color2);
     }
     // TODO: subscreen pixels can be clipped to black as well
     // TODO: math for subscreen pixels (add/sub sub to main)
     if(mathEnabled) {
       if(ppu->subtractColor) {
-        r -= (ppu->addSubscreen && secondLayer != 5) ? r2 : ppu->fixedColorR;
-        g -= (ppu->addSubscreen && secondLayer != 5) ? g2 : ppu->fixedColorG;
-        b -= (ppu->addSubscreen && secondLayer != 5) ? b2 : ppu->fixedColorB;
+        color1[0] -= (ppu->addSubscreen && secondLayer != 5) ? color2[0] : ppu->fixedColorR;
+        color1[1] -= (ppu->addSubscreen && secondLayer != 5) ? color2[1] : ppu->fixedColorG;
+        color1[2] -= (ppu->addSubscreen && secondLayer != 5) ? color2[2] : ppu->fixedColorB;
       } else {
-        r += (ppu->addSubscreen && secondLayer != 5) ? r2 : ppu->fixedColorR;
-        g += (ppu->addSubscreen && secondLayer != 5) ? g2 : ppu->fixedColorG;
-        b += (ppu->addSubscreen && secondLayer != 5) ? b2 : ppu->fixedColorB;
+        color1[0] += (ppu->addSubscreen && secondLayer != 5) ? color2[0] : ppu->fixedColorR;
+        color1[1] += (ppu->addSubscreen && secondLayer != 5) ? color2[1] : ppu->fixedColorG;
+        color1[2] += (ppu->addSubscreen && secondLayer != 5) ? color2[2] : ppu->fixedColorB;
       }
       if(ppu->halfColor && (secondLayer != 5 || !ppu->addSubscreen)) {
-        r >>= 1;
-        g >>= 1;
-        b >>= 1;
+        color1[0] >>= 1;
+        color1[1] >>= 1;
+        color1[2] >>= 1;
       }
-      if(r > 31) r = 31;
-      if(g > 31) g = 31;
-      if(b > 31) b = 31;
-      if(r < 0) r = 0;
-      if(g < 0) g = 0;
-      if(b < 0) b = 0;
+      for (int i = 0; i < 3; i++) {
+        if(color1[i] > 31) color1[i] = 31;
+        if(color1[i] < 0) color1[i] = 0;
+      }
     }
     if(!(ppu->pseudoHires || ppu->mode == 5 || ppu->mode == 6)) {
-      r2 = r; g2 = g; b2 = b;
+      memcpy(color2, color1, sizeof(color1));
     }
   }
   int row = (y - 1) + (ppu->evenFrame ? 0 : 239);
-  ppu->pixelBuffer[row * 2048 + x * 8 + 1] = ((b2 << 3) | (b2 >> 2)) * ppu->brightness / 15;
-  ppu->pixelBuffer[row * 2048 + x * 8 + 2] = ((g2 << 3) | (g2 >> 2)) * ppu->brightness / 15;
-  ppu->pixelBuffer[row * 2048 + x * 8 + 3] = ((r2 << 3) | (r2 >> 2)) * ppu->brightness / 15;
-  ppu->pixelBuffer[row * 2048 + x * 8 + 5] = ((b << 3) | (b >> 2)) * ppu->brightness / 15;
-  ppu->pixelBuffer[row * 2048 + x * 8 + 6] = ((g << 3) | (g >> 2)) * ppu->brightness / 15;
-  ppu->pixelBuffer[row * 2048 + x * 8 + 7] = ((r << 3) | (r >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 1] = ((color2[2] << 3) | (color2[2] >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 2] = ((color2[1] << 3) | (color2[1] >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 3] = ((color2[0] << 3) | (color2[0] >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 5] = ((color1[2] << 3) | (color1[2] >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 6] = ((color1[1] << 3) | (color1[1] >> 2)) * ppu->brightness / 15;
+  ppu->pixelBuffer[row * 2048 + x * 8 + 7] = ((color1[0] << 3) | (color1[0] >> 2)) * ppu->brightness / 15;
 }
 
-static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int* r, int* g, int* b) {
+static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int out[3]) {
   // figure out which color is on this location on main- or subscreen, sets it in r, g, b
   // returns which layer it is: 0-3 for bg layer, 4 or 6 for sprites (depending on palette), 5 for backdrop
   int actMode = ppu->mode == 1 && ppu->bg3priority ? 8 : ppu->mode;
@@ -356,14 +350,14 @@ static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int* r, int* g, int* b
     }
   }
   if(ppu->directColor && layer < 4 && bitDepthsPerMode[actMode][layer] == 8) {
-    *r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
-    *g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
-    *b = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
+    out[0] = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
+    out[1] = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
+    out[2] = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
   } else {
     uint16_t color = ppu->cgram[pixel & 0xff];
-    *r = color & 0x1f;
-    *g = (color >> 5) & 0x1f;
-    *b = (color >> 10) & 0x1f;
+    out[0] = color & 0x1f;
+    out[1] = (color >> 5) & 0x1f;
+    out[2] = (color >> 10) & 0x1f;
   }
   if(layer == 4 && pixel < 0xc0) layer = 6; // sprites with palette color < 0xc0
   return layer;
