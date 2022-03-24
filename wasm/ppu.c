@@ -62,7 +62,7 @@ static const int spriteSizes[8][2] = {
 };
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y);
-static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int out[3]);
+static PixelInfo ppu_getPixel(Ppu* ppu, int x, int y, bool sub);
 static uint16_t ppu_getOffsetValue(Ppu* ppu, int col, int row);
 static int ppu_getPixelForBgLayer(Ppu* ppu, int x, int y, int layer, bool priority);
 static void ppu_handleOPT(Ppu* ppu, int layer, int* lx, int* ly);
@@ -229,12 +229,13 @@ void ppu_runLine(Ppu* ppu, int line) {
 }
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y) {
-  int color1[3] = {}, color2[3] = {};
-
   bool colorWindowState = ppu->windowLayer[5].windowStateCache[x];
+  PixelInfo piMain = {}, piSub = {};
+  uint8_t* color1 = piMain.color;
+  uint8_t* color2 = piSub.color;
 
   if(!ppu->forcedBlank) {
-    int mainLayer = ppu_getPixel(ppu, x, y, false, color1);
+    piMain = ppu_getPixel(ppu, x, y, false);
     if(
       ppu->clipMode == 3 ||
       (ppu->clipMode == 2 && colorWindowState) ||
@@ -242,28 +243,28 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
     ) {
       color1[0] = 0, color1[1] = 0, color1[2] = 0;
     }
-    int secondLayer = 5; // backdrop
-    bool mathEnabled = mainLayer < 6 && ppu->mathEnabled[mainLayer] && !(
+    piSub.layer = 5;  // backdrop
+    bool mathEnabled = piMain.layer < 6 && ppu->mathEnabled[piMain.layer] && !(
       ppu->preventMathMode == 3 ||
       (ppu->preventMathMode == 2 && colorWindowState) ||
       (ppu->preventMathMode == 1 && !colorWindowState)
     );
     if((mathEnabled && ppu->addSubscreen) || ppu->pseudoHires || ppu->mode == 5 || ppu->mode == 6) {
-      secondLayer = ppu_getPixel(ppu, x, y, true, color2);
+      piSub = ppu_getPixel(ppu, x, y, true);
     }
     // TODO: subscreen pixels can be clipped to black as well
     // TODO: math for subscreen pixels (add/sub sub to main)
     if(mathEnabled) {
       if(ppu->subtractColor) {
-        color1[0] -= (ppu->addSubscreen && secondLayer != 5) ? color2[0] : ppu->fixedColorR;
-        color1[1] -= (ppu->addSubscreen && secondLayer != 5) ? color2[1] : ppu->fixedColorG;
-        color1[2] -= (ppu->addSubscreen && secondLayer != 5) ? color2[2] : ppu->fixedColorB;
+        color1[0] -= (ppu->addSubscreen && piSub.layer != 5) ? color2[0] : ppu->fixedColorR;
+        color1[1] -= (ppu->addSubscreen && piSub.layer != 5) ? color2[1] : ppu->fixedColorG;
+        color1[2] -= (ppu->addSubscreen && piSub.layer != 5) ? color2[2] : ppu->fixedColorB;
       } else {
-        color1[0] += (ppu->addSubscreen && secondLayer != 5) ? color2[0] : ppu->fixedColorR;
-        color1[1] += (ppu->addSubscreen && secondLayer != 5) ? color2[1] : ppu->fixedColorG;
-        color1[2] += (ppu->addSubscreen && secondLayer != 5) ? color2[2] : ppu->fixedColorB;
+        color1[0] += (ppu->addSubscreen && piSub.layer != 5) ? color2[0] : ppu->fixedColorR;
+        color1[1] += (ppu->addSubscreen && piSub.layer != 5) ? color2[1] : ppu->fixedColorG;
+        color1[2] += (ppu->addSubscreen && piSub.layer != 5) ? color2[2] : ppu->fixedColorB;
       }
-      if(ppu->halfColor && (secondLayer != 5 || !ppu->addSubscreen)) {
+      if(ppu->halfColor && (piSub.layer != 5 || !ppu->addSubscreen)) {
         color1[0] >>= 1;
         color1[1] >>= 1;
         color1[2] >>= 1;
@@ -274,7 +275,7 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
       }
     }
     if(!(ppu->pseudoHires || ppu->mode == 5 || ppu->mode == 6)) {
-      memcpy(color2, color1, sizeof(color1));
+      memcpy(piSub.color, piMain.color, sizeof(piMain.color));
     }
   }
   int row = (y - 1) + (ppu->evenFrame ? 0 : 239);
@@ -286,7 +287,8 @@ static void ppu_handlePixel(Ppu* ppu, int x, int y) {
   ppu->pixelBuffer[row * 2048 + x * 8 + 7] = ((color1[0] << 3) | (color1[0] >> 2)) * ppu->brightness / 15;
 }
 
-static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int out[3]) {
+static PixelInfo ppu_getPixel(Ppu* ppu, int x, int y, bool sub) {
+  PixelInfo ret;
   // figure out which color is on this location on main- or subscreen, sets it in r, g, b
   // returns which layer it is: 0-3 for bg layer, 4 or 6 for sprites (depending on palette), 5 for backdrop
   int actMode = ppu->mode == 1 && ppu->bg3priority ? 8 : ppu->mode;
@@ -350,17 +352,18 @@ static int ppu_getPixel(Ppu* ppu, int x, int y, bool sub, int out[3]) {
     }
   }
   if(ppu->directColor && layer < 4 && bitDepthsPerMode[actMode][layer] == 8) {
-    out[0] = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
-    out[1] = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
-    out[2] = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
+    ret.color[0] = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
+    ret.color[1] = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
+    ret.color[2] = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
   } else {
     uint16_t color = ppu->cgram[pixel & 0xff];
-    out[0] = color & 0x1f;
-    out[1] = (color >> 5) & 0x1f;
-    out[2] = (color >> 10) & 0x1f;
+    ret.color[0] = color & 0x1f;
+    ret.color[1] = (color >> 5) & 0x1f;
+    ret.color[2] = (color >> 10) & 0x1f;
   }
   if(layer == 4 && pixel < 0xc0) layer = 6; // sprites with palette color < 0xc0
-  return layer;
+  ret.layer = layer;
+  return ret;
 }
 
 static void ppu_handleOPT(Ppu* ppu, int layer, int* lx, int* ly) {

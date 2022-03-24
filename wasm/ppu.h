@@ -11,6 +11,11 @@ typedef struct Ppu Ppu;
 
 #include "snes.h"
 
+typedef struct PixelInfo {
+  uint8_t layer;
+  uint8_t color[3];
+} PixelInfo;
+
 typedef struct BgLayer {
   uint16_t hScroll;
   uint16_t vScroll;

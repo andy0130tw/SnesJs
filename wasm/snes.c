@@ -16,15 +16,6 @@ void snes_free(Snes* snes) {
 
 EMSCRIPTEN_KEEPALIVE
 void snes_fixByteOrder(uint8_t buf[2048*480]) {
-  /*for (int i = 0; i < 2048 * 120; i++) {
-    buf[i*4] = buf[i*4+3];
-    buf[i*4+3] = 255;
-
-    uint8_t tmp;
-    tmp = buf[i*4+1];
-    buf[i*4+1] = buf[i*4+2];
-    buf[i*4+2] = tmp;
-  }*/
   uint32_t* buf2 = (uint32_t*) buf;
 
   for (int i = 0; i < 2048 * 120; i++) {
@@ -34,8 +25,7 @@ void snes_fixByteOrder(uint8_t buf[2048*480]) {
     /*buf[i*4] = buf[i*4+3];
     buf[i*4+3] = 255;
 
-    uint8_t tmp;
-    tmp = buf[i*4+1];
+    uint8_t tmp = buf[i*4+1];
     buf[i*4+1] = buf[i*4+2];
     buf[i*4+2] = tmp;*/
   }
